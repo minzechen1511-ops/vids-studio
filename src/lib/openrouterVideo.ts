@@ -1,4 +1,4 @@
-import type { ModelCatalog } from './modelRouting';
+import { FREE_LTX_MODEL, type ModelCatalog } from './modelRouting';
 import type { Wan3GenerationInput } from './wan3';
 
 let cached: { value: ModelCatalog; expires: number } | undefined;
@@ -19,7 +19,7 @@ export async function loadModelCatalog(): Promise<ModelCatalog> {
     supported_aspect_ratios: m.supported_aspect_ratios,
   }));
   const value: ModelCatalog = {
-    videoModels,
+    videoModels: [FREE_LTX_MODEL, ...videoModels],
     visionModelIds: models.data.filter((m: any) => m.architecture?.input_modalities?.includes('image')).map((m: any) => m.id),
     textModelIds: models.data.filter((m: any) => m.architecture?.output_modalities?.includes('text') &&
       !videoModels.some((v: any) => v.id === m.id)).map((m: any) => m.id),

@@ -29,8 +29,9 @@ import {
   parseFreeOpenRouterModels,
   type OpenRouterModelOption,
 } from './src/lib/openrouterModels.ts';
-import { selectGenerationRoute, validateVideoModelSettings } from './src/lib/modelRouting.ts';
+import { FREE_LTX_MODEL, modelIdentifierError, selectGenerationRoute, validateVideoModelSettings } from './src/lib/modelRouting.ts';
 import { loadModelCatalog, openRouterContentUrl, writeVideoScript } from './src/lib/openrouterVideo.ts';
+import { getLtxTask, LTX_SPACE_URL, submitLtxVideo, validateLtxInput } from './src/lib/ltxSpace.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -73,6 +74,7 @@ interface StoredSavedModelsState {
 const VALID_PROVIDER_HINTS = new Set<RemoteProviderHint>([
   'auto',
   'openrouter',
+  'huggingface-space',
   'dashscope',
   'fal',
   'replicate',
@@ -89,7 +91,7 @@ function readSavedModelsStore(): StoredSavedModelsState {
     const raw = fs.readFileSync(SAVED_MODELS_FILE, 'utf8');
     const parsed = JSON.parse(raw) as StoredSavedModelsState;
     return {
-      savedModels: Array.isArray(parsed.savedModels) ? parsed.savedModels : [],
+      savedModels: Array.isArray(parsed.savedModels) ? parsed.savedModels.filter(m => typeof m?.modelId === 'string' && !modelIdentifierError(m.modelId)) : [],
       activeConfig: parsed.activeConfig || undefined,
     };
   } catch {
@@ -233,7 +235,7 @@ export async function createApp(options: { frontend?: boolean } = {}) {
 
   app.get('/api/model-catalog', async (_req, res) => {
     try { res.json(await loadModelCatalog()); }
-    catch (err) { res.status(503).json({ error: err instanceof Error ? err.message : 'Model catalog unavailable.' }); }
+    catch (err) { res.json({ videoModels: [FREE_LTX_MODEL], textModelIds: [], catalogWarning: 'OpenRouter catalog unavailable. The free LTX demo is still selectable.' }); }
   });
 
   app.put('/api/saved-models', (req, res) => {
@@ -247,6 +249,8 @@ export async function createApp(options: { frontend?: boolean } = {}) {
         if (!item || typeof item !== 'object') continue;
         const modelId = typeof item.modelId === 'string' ? item.modelId.trim().slice(0, 180) : '';
         if (!modelId) continue;
+        const modelError = modelIdentifierError(modelId);
+        if (modelError) { res.status(400).json({ error: modelError }); return; }
         const endpoint = typeof item.endpoint === 'string' ? item.endpoint.trim().slice(0, 400) : '';
         if (endpoint) {
           const check = validateAllowedHttpsEndpoint(
@@ -277,6 +281,8 @@ export async function createApp(options: { frontend?: boolean } = {}) {
       }
 
       const rawActive = body.activeConfig;
+      const activeModelError = modelIdentifierError(rawActive?.remoteModelId || '');
+      if (activeModelError) { res.status(400).json({ error: activeModelError }); return; }
       const sanitizedActive: StoredSavedModelsState['activeConfig'] = rawActive
         ? {
             rendererPresetId: typeof rawActive.rendererPresetId === 'string' ? rawActive.rendererPresetId.slice(0, 80) : '',
@@ -591,8 +597,10 @@ export async function createApp(options: { frontend?: boolean } = {}) {
         const videoSpec = catalog.videoModels.find(m => m.id === selection.videoInput.remoteModelId);
         if (videoSpec) validateVideoModelSettings(selection.videoInput, videoSpec);
         // Validate both bindings before spending tokens on the director.
-        const rendererKey = resolveVideoSecretKey('openrouter', selection.videoInput.secretEnvName, process.env);
-        if (!rendererKey.apiKey) throw new Error('Set OPENROUTER_API_KEY in Settings → Secrets for the selected video model.');
+        const rendererProvider = selection.videoInput.remoteProvider === 'huggingface-space' ? 'huggingface-space' : 'openrouter';
+        const rendererKey = resolveVideoSecretKey(rendererProvider, selection.videoInput.secretEnvName, process.env);
+        if (!rendererKey.apiKey && rendererProvider !== 'huggingface-space') throw new Error('Set OPENROUTER_API_KEY in Settings → Secrets for the selected video model.');
+        if (rendererProvider === 'huggingface-space') validateLtxInput(selection.videoInput);
         directorModel = selection.directorModel;
         if (directorModel) {
           const directorKey = resolveVideoSecretKey('openrouter', selection.directorSecret, process.env);
@@ -604,6 +612,16 @@ export async function createApp(options: { frontend?: boolean } = {}) {
       const job = buildWan3CompiledJob(input);
       if (directorScript) job.compiledPrompt += `\n\nShooting script by ${directorModel} (follow the original prompt above):\n${directorScript}`;
       const effectiveModel = getEffectiveModelId(input);
+      if (input.remoteProvider === 'huggingface-space') {
+        const secret = resolveVideoSecretKey('huggingface-space', input.secretEnvName, process.env);
+        const taskId = await submitLtxVideo(input, job, secret.apiKey);
+        res.json({
+          status: 'submitted', provider: 'huggingface-space', taskId, videoUrl: null, job, validation,
+          appliedConfig: { model: effectiveModel, provider: 'huggingface-space', endpoint: LTX_SPACE_URL, secretUsed: secret.secretUsed || 'none', directorModel },
+          notice: 'Submitted to the free official LTX demo. Shared GPU queue and daily quota apply. No paid renderer fallback is used.',
+        });
+        return;
+      }
       const localEndpoint = process.env.LOCAL_WAN_ENDPOINT?.trim();
       const wanProviderHint = input.remoteProvider || process.env.WAN_PROVIDER?.trim();
       const endpointResolution = resolveEffectiveVideoEndpoint(
@@ -910,6 +928,8 @@ export async function createApp(options: { frontend?: boolean } = {}) {
       }
 
       const tracked = activeRemoteTasks.get(taskId);
+      const ltxTask = getLtxTask(taskId);
+      if (ltxTask) { res.json(ltxTask); return; }
       const localEndpoint = process.env.LOCAL_WAN_ENDPOINT?.trim();
       const wanEndpoint = process.env.WAN_API_ENDPOINT?.trim();
 

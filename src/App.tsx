@@ -11,7 +11,7 @@ import {
 import { TopBar, type AppView } from './components/TopBar';
 import { VideoSettingsPanel, type SavedVideoModel } from './components/VideoSettingsPanel';
 import { VocabBrowser } from './components/VocabBrowser';
-import { isDirectorModel, type ModelCatalog, type VideoModelOption } from './lib/modelRouting';
+import { FREE_LTX_MODEL, isDirectorModel, modelIdentifierError, type ModelCatalog, type VideoModelOption } from './lib/modelRouting';
 import type { OpenRouterModelOption } from './lib/openrouterModels';
 import type { AiDirectorPlan } from './lib/promptSceneParser';
 import {
@@ -102,7 +102,7 @@ export default function App() {
   const [savedModels, setSavedModels] = useState<SavedVideoModel[]>(() => {
     try {
       const raw = localStorage.getItem(SAVED_MODELS_STORAGE_KEY);
-      return raw ? (JSON.parse(raw) as SavedVideoModel[]) : [];
+      return raw ? (JSON.parse(raw) as SavedVideoModel[]).filter(m => typeof m?.modelId === 'string' && !modelIdentifierError(m.modelId)) : [];
     } catch {
       return [];
     }
@@ -168,6 +168,14 @@ export default function App() {
   const [activeTake, setActiveTake] = useState<HistoryTake | null>(null);
 
   useEffect(() => {
+    if (remoteProvider === 'huggingface-space') {
+      setGenerateAudio(false);
+      setDuration(2);
+      setResolution('480p');
+    }
+  }, [remoteProvider]);
+
+  useEffect(() => {
     if (isDirectorModel(remoteModelId, modelCatalog) && openrouterModel !== remoteModelId) {
       setOpenRouterModel(remoteModelId);
     }
@@ -178,6 +186,7 @@ export default function App() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Could not load the live model catalog.');
       setModelCatalog(data);
+      if (data.catalogWarning) setCatalogError(data.catalogWarning);
     }).catch(err => setCatalogError(err.message));
     fetch('/api/capabilities')
       .then((res) => (res.ok ? (res.json() as Promise<ServerCapabilities>) : null))
@@ -424,6 +433,8 @@ export default function App() {
   function handleSaveModelPreset() {
     const cleanModel = remoteModelId.trim();
     if (!cleanModel) return;
+    const modelError = modelIdentifierError(cleanModel);
+    if (modelError) { setGenerationError(modelError); return; }
     const cleanEndpoint = remoteEndpoint.trim();
     const cleanSecret = secretEnvName || 'auto';
     const nextItem: SavedVideoModel = {
@@ -480,16 +491,25 @@ export default function App() {
   }
 
   function handleSaveRenderer(model: VideoModelOption) {
-    const existing = savedModels.find(m => m.modelId === model.id && m.provider === 'openrouter' && !m.endpoint);
+    const provider = model.provider || 'openrouter';
+    const existing = savedModels.find(m => m.modelId === model.id && m.provider === provider && !m.endpoint);
     const preset: SavedVideoModel = existing || {
-      id: `model-${Date.now()}`, modelId: model.id, endpoint: '', provider: 'openrouter',
-      secretEnvName: 'OPENROUTER_API_KEY', savedAt: new Date().toISOString(),
+      id: `model-${Date.now()}`, modelId: model.id, endpoint: '', provider,
+      secretEnvName: model.free ? 'none' : 'OPENROUTER_API_KEY', savedAt: new Date().toISOString(),
     };
-    setSavedModels(prev => existing ? prev : [preset, ...prev].slice(0, 16));
+    setSavedModels(prev => (existing ? prev : [preset, ...prev]).filter(m => !modelIdentifierError(m.modelId)).slice(0, 16));
     setRendererPresetId(preset.id);
-    if (!isDirectorModel(remoteModelId, modelCatalog)) handleSelectSavedModel(preset);
-    if (model.supported_durations?.length && !model.supported_durations.includes(duration)) setDuration(model.supported_durations[0]);
-    if (model.supported_resolutions?.length && !model.supported_resolutions.includes(resolution)) {
+    if (model.free || !isDirectorModel(remoteModelId, modelCatalog)) handleSelectSavedModel(preset);
+    if (model.free) {
+      setDuration(2);
+      setResolution('480p');
+      setGenerateAudio(false);
+      setEndImage(null);
+      setReferenceImages([]);
+      setMediaMode('frames');
+    }
+    if (!model.free && model.supported_durations?.length && !model.supported_durations.includes(duration)) setDuration(model.supported_durations[0]);
+    if (!model.free && model.supported_resolutions?.length && !model.supported_resolutions.includes(resolution)) {
       const supported = model.supported_resolutions.find(r => ['480p', '720p', '1080p'].includes(r));
       if (supported) setResolution(supported as Wan3Resolution);
     }

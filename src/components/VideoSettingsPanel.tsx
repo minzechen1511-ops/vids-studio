@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { isDirectorModel, type ModelCatalog, type VideoModelOption } from '../lib/modelRouting';
+import { FREE_LTX_MODEL, isDirectorModel, modelIdentifierError, type ModelCatalog, type VideoModelOption } from '../lib/modelRouting';
 import { BookmarkPlus, Check, Server, Trash2 } from 'lucide-react';
 import {
   CAMERA_PRESETS,
@@ -120,8 +120,9 @@ export function VideoSettingsPanel({
   const secretOptions = Array.from(new Set([...availableSecretKeys, ...KNOWN_SECRET_OPTIONS]));
   const hasAnySecret = availableSecretKeys.length > 0 || hasLocalWanEndpoint;
   const isDirector = isDirectorModel(remoteModelId, modelCatalog);
+  const identifierError = modelIdentifierError(remoteModelId);
   const savedRenderers = savedModels.filter(m => modelCatalog.videoModels.some(v => v.id === m.modelId) &&
-    (m.provider === 'auto' || m.provider === 'openrouter') && !m.endpoint);
+    (m.provider === 'auto' || m.provider === 'openrouter' || m.provider === 'huggingface-space') && !m.endpoint);
 
   function handleSaveClick() {
     if (!remoteModelId.trim()) return;
@@ -143,6 +144,10 @@ export function VideoSettingsPanel({
 
       {/* Custom Video Model ID, Provider, Secret Binding, Endpoint & Saved Profiles */}
       <div className="space-y-3 rounded-lg border border-white/[0.08] bg-[#0E1116] p-3">
+        <div className="space-y-2 rounded-md border border-emerald-500/30 p-3">
+          <button type="button" onClick={() => onSaveRenderer(FREE_LTX_MODEL)} className="rounded bg-emerald-700 px-3 py-2 text-xs font-medium text-white">Use free LTX video renderer</button>
+          <p className="text-[11px] text-[#949BA8]">Official Lightricks demo. Free shared GPU quota; no key required. Saves and activates LTX with a two-second, silent shot. An optional HF_TOKEN in Secrets uses your Hugging Face quota.</p>
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs font-medium text-[#D1D6E0]">
             Custom Video Model &amp; Endpoint
@@ -176,6 +181,7 @@ export function VideoSettingsPanel({
               placeholder="Select a saved model or enter its exact provider ID"
               className="w-full rounded-lg border border-white/[0.1] bg-[#12151B] px-2.5 py-2 font-mono text-xs text-[#F2F4F8] placeholder:text-[#6B7380] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E5A93C]"
             />
+            {identifierError && <p role="alert" className="text-xs text-red-300">{identifierError}</p>}
           </div>
 
           <div className="space-y-1">
@@ -190,6 +196,7 @@ export function VideoSettingsPanel({
             >
               <option value="auto">Auto-detect from Endpoint / ID</option>
               <option value="openrouter">OpenRouter Video API / Script Director</option>
+              <option value="huggingface-space">Free LTX demo (Hugging Face Space)</option>
               <option value="huggingface">Hugging Face Inference (Wan2.1 / LTX)</option>
               <option value="fal">fal.ai (Queue / REST)</option>
               <option value="dashscope">Alibaba DashScope (Wan)</option>
@@ -239,7 +246,7 @@ export function VideoSettingsPanel({
             <button
               type="button"
               onClick={handleSaveClick}
-              disabled={!remoteModelId.trim()}
+              disabled={!remoteModelId.trim() || Boolean(identifierError)}
               className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[#E5A93C]/50 bg-[#E5A93C]/15 px-3 py-2 text-xs font-medium text-[#F5D692] transition-colors hover:bg-[#E5A93C]/25 disabled:cursor-not-allowed disabled:opacity-40 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E5A93C]"
             >
               {justSaved ? (
@@ -327,9 +334,9 @@ export function VideoSettingsPanel({
             if (model) onSaveRenderer(model);
           }} className="w-full rounded bg-[#12151B] p-2 text-xs">
             <option value="">Choose and save a video model…</option>
-            {modelCatalog.videoModels.map(m => <option key={m.id} value={m.id}>{m.name} · {m.id}</option>)}
+            {modelCatalog.videoModels.map(m => <option key={m.id} value={m.id}>{m.free ? '[Free quota] ' : '[Provider credits] '}{m.name} · {m.id}</option>)}
           </select>
-          <p className="text-[11px] text-[#949BA8]">Uses OPENROUTER_API_KEY in Settings → Secrets. Generation uses your provider credits. No model is selected automatically.</p>
+          <p className="text-[11px] text-[#949BA8]">Free LTX uses None / keyless, or your HF_TOKEN. OpenRouter models use OPENROUTER_API_KEY and provider credits. Secret names are credential bindings, not model IDs.</p>
           {catalogError && <p role="alert" className="text-xs text-red-300">{catalogError} Reload to retry.</p>}
         </div>
 

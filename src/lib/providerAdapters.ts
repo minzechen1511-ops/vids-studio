@@ -1,9 +1,10 @@
 import { getEffectiveModelId, type Wan3CompiledJob, type Wan3GenerationInput } from './wan3';
 
-export type WanProviderKind = 'openrouter' | 'dashscope' | 'fal' | 'replicate' | 'huggingface' | 'comfyui' | 'generic';
+export type WanProviderKind = 'huggingface-space' | 'openrouter' | 'dashscope' | 'fal' | 'replicate' | 'huggingface' | 'comfyui' | 'generic';
 
 const ALLOWED_VIDEO_HOSTS = new Set([
   'openrouter.ai',
+  'lightricks-ltx-video-distilled.hf.space',
   'queue.fal.run',
   'fal.run',
   'dashscope.aliyuncs.com',
@@ -60,6 +61,9 @@ export function resolveVideoSecretKey(
   }
 
   if (req && req.toLowerCase() !== 'auto') {
+    if (provider === 'huggingface-space' && !['HF_TOKEN', 'HUGGINGFACE_API_KEY', 'HUGGINGFACEHUB_API_TOKEN'].includes(req)) {
+      throw new Error('The free Hugging Face renderer uses None (keyless) or an HF_TOKEN. Other provider keys cannot be used with it.');
+    }
     const allowed = ALLOWED_VIDEO_SECRET_NAMES.find((n) => n === req);
     if (allowed) {
       const val = env[allowed]?.trim();
@@ -71,6 +75,7 @@ export function resolveVideoSecretKey(
   }
 
   const priorityByProvider: Record<WanProviderKind, string[]> = {
+    'huggingface-space': ['HF_TOKEN', 'HUGGINGFACE_API_KEY', 'HUGGINGFACEHUB_API_TOKEN'],
     openrouter: ['OPENROUTER_API_KEY'],
     huggingface: ['HF_TOKEN', 'HUGGINGFACE_API_KEY', 'HUGGINGFACEHUB_API_TOKEN', 'VIDEO_API_KEY', 'WAN_API_KEY'],
     fal: ['FAL_KEY', 'FAL_API_KEY', 'VIDEO_API_KEY', 'WAN_API_KEY'],

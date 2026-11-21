@@ -2,6 +2,7 @@ import {
   DEFAULT_FREE_OPENROUTER_MODELS,
   type OpenRouterModelOption,
 } from './openrouterModels';
+import { modelIdentifierError } from './modelRouting';
 
 export type { OpenRouterModelOption };
 
@@ -12,6 +13,7 @@ export type Wan3MediaMode = 'frames' | 'references';
 export type RemoteProviderHint =
   | 'auto'
   | 'openrouter'
+  | 'huggingface-space'
   | 'dashscope'
   | 'fal'
   | 'replicate'
@@ -496,6 +498,9 @@ export function validateWan3Payload(input: Wan3GenerationInput): ValidationResul
   const errors: string[] = [];
   const warnings: string[] = [];
   const spec = getWanModelSpec(input.modelId);
+
+  const identifierError = modelIdentifierError(input.remoteModelId || '');
+  if (identifierError) errors.push(identifierError);
 
   if (!spec) {
     errors.push(

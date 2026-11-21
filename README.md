@@ -4,6 +4,10 @@ Saved Models preserve the selected model ID, provider, endpoint and **secret nam
 
 ## Generate video
 
+For free generation, select **Use free LTX video renderer**. This saves the official Lightricks LTX Video 0.9.8 Distilled demo with the Hugging Face Space adapter and `none` secret binding. No key is needed. An existing Hugging Face token can optionally be bound as `HF_TOKEN`; OpenRouter/Wan credentials are never sent to this demo. The button selects a two-second silent clip at 480p, supports text or one start image, and uses the public shared GPU quota. Quota errors are reported without switching to paid models. Outputs are temporary files hosted by the demo, so download completed clips.
+
+`WAN_API_KEY`, `OPENROUTER_API_KEY` and `HF_TOKEN` are credential names, not model IDs. The model-ID field rejects them.
+
 1. Configure the provider key in Google AI Studio **Settings → Secrets**. OpenRouter script directors and video models use `OPENROUTER_API_KEY`.
 2. Select a saved model. Video models submit directly to their saved provider. A text model such as `moonshotai/kimi-k3.1-pro` writes a shooting script and needs a separate saved video renderer.
 3. If no renderer is saved, use **Add a video renderer from the live catalog**. This saves the chosen video model with the OpenRouter provider and key binding. Video generation consumes provider credits.
