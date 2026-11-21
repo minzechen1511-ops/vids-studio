@@ -1,8 +1,9 @@
 import { getEffectiveModelId, type Wan3CompiledJob, type Wan3GenerationInput } from './wan3';
 
-export type WanProviderKind = 'dashscope' | 'fal' | 'replicate' | 'huggingface' | 'comfyui' | 'generic';
+export type WanProviderKind = 'openrouter' | 'dashscope' | 'fal' | 'replicate' | 'huggingface' | 'comfyui' | 'generic';
 
 const ALLOWED_VIDEO_HOSTS = new Set([
+  'openrouter.ai',
   'queue.fal.run',
   'fal.run',
   'dashscope.aliyuncs.com',
@@ -66,9 +67,11 @@ export function resolveVideoSecretKey(
         return { apiKey: val, secretUsed: allowed };
       }
     }
+    throw new Error(`Secret ${req} is not configured. Set it in Settings → Secrets or change the saved model binding.`);
   }
 
   const priorityByProvider: Record<WanProviderKind, string[]> = {
+    openrouter: ['OPENROUTER_API_KEY'],
     huggingface: ['HF_TOKEN', 'HUGGINGFACE_API_KEY', 'HUGGINGFACEHUB_API_TOKEN', 'VIDEO_API_KEY', 'WAN_API_KEY'],
     fal: ['FAL_KEY', 'FAL_API_KEY', 'VIDEO_API_KEY', 'WAN_API_KEY'],
     replicate: ['REPLICATE_API_TOKEN', 'REPLICATE_API_KEY', 'VIDEO_API_KEY', 'WAN_API_KEY'],
@@ -78,13 +81,6 @@ export function resolveVideoSecretKey(
       'VIDEO_API_KEY',
       'CUSTOM_VIDEO_API_KEY',
       'WAN_API_KEY',
-      'HF_TOKEN',
-      'FAL_KEY',
-      'REPLICATE_API_TOKEN',
-      'DASHSCOPE_API_KEY',
-      'HIGGSFIELD_API_KEY',
-      'KLING_API_KEY',
-      'RUNWAY_API_KEY',
     ],
   };
 
@@ -109,7 +105,12 @@ export function resolveEffectiveVideoEndpoint(
     return { endpoint: uiEndpoint, source: 'ui' };
   }
 
-  const configuredEnv = envEndpoint?.trim();
+  // An explicit saved provider takes precedence over a legacy global Wan endpoint.
+  if (input.remoteProvider === 'openrouter') {
+    return { endpoint: 'https://openrouter.ai/api/v1/videos', source: 'derived' };
+  }
+
+  const configuredEnv = (input.remoteProvider === 'auto' || !input.remoteProvider) ? envEndpoint?.trim() : '';
   if (configuredEnv) {
     return { endpoint: configuredEnv, source: 'env' };
   }
@@ -254,6 +255,7 @@ export function detectWanProvider(
 ): WanProviderKind {
   const hint = (explicitProvider || '').trim().toLowerCase();
   if (
+    hint === 'openrouter' ||
     hint === 'dashscope' ||
     hint === 'fal' ||
     hint === 'replicate' ||
@@ -265,6 +267,7 @@ export function detectWanProvider(
   }
 
   const lower = endpointUrl.toLowerCase();
+  if (new URL(endpointUrl).hostname === 'openrouter.ai') return 'openrouter';
   if (lower.includes('dashscope')) return 'dashscope';
   if (lower.includes('fal.run') || lower.includes('fal.ai')) return 'fal';
   if (lower.includes('replicate.com')) return 'replicate';
@@ -311,6 +314,28 @@ export function buildProviderRequestPayload(
 ): { headers: Record<string, string>; body: Record<string, unknown> } {
   const duration = input.duration === -1 ? 10 : input.duration;
   const effectiveModel = getEffectiveModelId(input);
+
+  if (provider === 'openrouter') {
+    const frameImages = input.mediaMode === 'frames'
+      ? [
+          ...(input.startImage ? [{ type: 'image_url', image_url: { url: input.startImage.dataUrl }, frame_type: 'first_frame' }] : []),
+          ...(input.endImage ? [{ type: 'image_url', image_url: { url: input.endImage.dataUrl }, frame_type: 'last_frame' }] : []),
+        ] : [];
+    return {
+      headers: {},
+      body: {
+        model: effectiveModel,
+        prompt: job.compiledPrompt,
+        duration,
+        resolution: input.resolution,
+        aspect_ratio: input.aspectRatio === 'auto' ? '16:9' : input.aspectRatio,
+        generate_audio: input.generateAudio,
+        ...(frameImages.length ? { frame_images: frameImages } : {}),
+        ...(input.mediaMode === 'references' && input.referenceImages?.length
+          ? { input_references: input.referenceImages.map(r => ({ type: 'image_url', image_url: { url: r.dataUrl } })) } : {}),
+      },
+    };
+  }
 
   if (provider === 'dashscope') {
     const dashInput: Record<string, unknown> = {
@@ -481,6 +506,7 @@ export function extractVideoAndTask(data: Record<string, unknown>): {
     null;
 
   const statusUrl =
+    (typeof data.polling_url === 'string' && data.polling_url) ||
     (typeof data.status_url === 'string' && data.status_url) ||
     (urlsObj && typeof urlsObj.get === 'string' && urlsObj.get) ||
     null;

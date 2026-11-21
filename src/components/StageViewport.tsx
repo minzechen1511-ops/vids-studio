@@ -428,7 +428,7 @@ export function StageViewport({
               </h3>
               <p className="mt-1.5 max-w-md text-xs leading-relaxed text-[#949BA8]">
                 Click Generate Video to encode a playable WebM motion video directly in your browser,
-                or attach a self-hosted Wan 2.6 GPU / cloud endpoint in Secrets.
+                or select a saved video model and its provider.
               </p>
               <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
                 {STARTER_REFERENCES.map((s) => (
@@ -468,7 +468,7 @@ export function StageViewport({
                 ). Select a cloud adapter (<code className="font-mono text-[#D1D6E0]">huggingface</code>,{' '}
                 <code className="font-mono text-[#D1D6E0]">fal</code>,{' '}
                 <code className="font-mono text-[#D1D6E0]">replicate</code>,{' '}
-                <code className="font-mono text-[#D1D6E0]">dashscope</code>) or enter an HTTPS endpoint URL for remote neural video, or render an AI-directed storyboard clip locally.
+                <code className="font-mono text-[#D1D6E0]">dashscope</code>) or enter an HTTPS endpoint URL for remote neural video, A text director needs a saved video renderer.
               </p>
             )}
           </div>
@@ -484,7 +484,7 @@ export function StageViewport({
         >
           {(
             [
-              { id: 'prompt', label: 'Compiled Wan Prompt' },
+              { id: 'prompt', label: 'Compiled Video Prompt' },
               { id: 'payload', label: 'API Payload & CLI' },
               { id: 'history', label: `Session History (${history.length})` },
             ] as const
@@ -518,7 +518,7 @@ export function StageViewport({
             <div className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <span className="text-xs text-[#949BA8]">
-                  Structured via Higgsfield Wan prompting dialect ({displayJob.model})
+                  Compiled for selected model ({displayJob.model})
                 </span>
                 <button
                   type="button"
@@ -567,7 +567,7 @@ export function StageViewport({
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-medium text-[#D1D6E0]">
-                    Wan JSON Specification
+                    Video JSON Specification
                   </span>
                   <button
                     type="button"

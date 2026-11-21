@@ -11,7 +11,7 @@ import {
 import { TopBar, type AppView } from './components/TopBar';
 import { VideoSettingsPanel, type SavedVideoModel } from './components/VideoSettingsPanel';
 import { VocabBrowser } from './components/VocabBrowser';
-import { renderLocalMotionVideo } from './lib/localVideoRenderer';
+import { isDirectorModel, type ModelCatalog, type VideoModelOption } from './lib/modelRouting';
 import type { OpenRouterModelOption } from './lib/openrouterModels';
 import type { AiDirectorPlan } from './lib/promptSceneParser';
 import {
@@ -42,6 +42,7 @@ interface ActiveRoutingConfig {
   secretEnvName: string;
   openrouterModel: string;
   openrouterEndpoint: string;
+  rendererPresetId?: string;
 }
 
 function loadSavedActiveConfig(): Partial<ActiveRoutingConfig> {
@@ -86,7 +87,7 @@ export default function App() {
   // Shot Composer State — single Custom Video Model mode backed by saved presets
   const [modelId, setModelId] = useState<Wan3ModelId>('custom');
   const [remoteModelId, setRemoteModelId] = useState<string>(
-    initialConfig.remoteModelId ?? 'wan3_0'
+    initialConfig.remoteModelId ?? ''
   );
   const [remoteEndpoint, setRemoteEndpoint] = useState<string>(
     initialConfig.remoteEndpoint ?? ''
@@ -106,7 +107,10 @@ export default function App() {
       return [];
     }
   });
-  const serverHydratedRef = useRef(false);
+  const [modelsHydrated, setModelsHydrated] = useState(false);
+  const [rendererPresetId, setRendererPresetId] = useState(initialConfig.rendererPresetId || '');
+  const [modelCatalog, setModelCatalog] = useState<ModelCatalog>({ videoModels: [], textModelIds: [] });
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   const [mediaMode, setMediaMode] = useState<Wan3MediaMode>('frames');
   const [startImage, setStartImage] = useState<ReferenceAsset | null>({
@@ -169,6 +173,11 @@ export default function App() {
   const [activeTake, setActiveTake] = useState<HistoryTake | null>(null);
 
   useEffect(() => {
+    fetch('/api/model-catalog').then(async res => {
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not load the live model catalog.');
+      setModelCatalog(data);
+    }).catch(err => setCatalogError(err.message));
     fetch('/api/capabilities')
       .then((res) => (res.ok ? (res.json() as Promise<ServerCapabilities>) : null))
       .then((data) => {
@@ -219,6 +228,7 @@ export default function App() {
             setRemoteEndpoint(data.activeConfig.remoteEndpoint);
           if (data.activeConfig.remoteProvider) setRemoteProvider(data.activeConfig.remoteProvider);
           if (data.activeConfig.secretEnvName) setSecretEnvName(data.activeConfig.secretEnvName);
+          if (data.activeConfig.rendererPresetId) setRendererPresetId(data.activeConfig.rendererPresetId);
           if (data.activeConfig.openrouterModel && !initialConfig.openrouterModel) {
             setOpenRouterModel(data.activeConfig.openrouterModel);
           }
@@ -231,7 +241,7 @@ export default function App() {
         // Ignore server store unavailability
       })
       .finally(() => {
-        serverHydratedRef.current = true;
+        setModelsHydrated(true);
       });
   }, [initialConfig.openrouterEndpoint, initialConfig.openrouterModel, initialConfig.remoteModelId, initialConfig.remoteProvider]);
 
@@ -259,20 +269,20 @@ export default function App() {
     void loadFreeOpenRouterModels(false);
   }, []);
 
-  function syncSavedStateToServer(
+  async function syncSavedStateToServer(
     nextModels: SavedVideoModel[],
     nextActive: ActiveRoutingConfig
   ) {
-    fetch('/api/saved-models', {
+    const response = await fetch('/api/saved-models', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         savedModels: nextModels,
-        activeConfig: nextActive,
+        activeConfig: { ...nextActive, rendererPresetId },
       }),
-    }).catch(() => {
-      // Non-fatal if server store sync is unavailable
-    });
+    }).catch(() => null);
+    if (!response?.ok) setStatusMessage('Saved in this browser; server sync failed. Retry saving before generating.');
+    return Boolean(response?.ok);
   }
 
   useEffect(() => {
@@ -283,19 +293,20 @@ export default function App() {
       secretEnvName,
       openrouterModel,
       openrouterEndpoint,
+      rendererPresetId,
     };
     try {
       localStorage.setItem(ACTIVE_CONFIG_STORAGE_KEY, JSON.stringify(payload));
     } catch {
       // Ignore storage quota errors
     }
-    if (serverHydratedRef.current) {
+    if (modelsHydrated) {
       const timer = window.setTimeout(() => {
         syncSavedStateToServer(savedModels, payload);
       }, 350);
       return () => window.clearTimeout(timer);
     }
-  }, [remoteModelId, remoteEndpoint, remoteProvider, secretEnvName, openrouterModel, openrouterEndpoint, savedModels]);
+  }, [remoteModelId, remoteEndpoint, remoteProvider, secretEnvName, openrouterModel, openrouterEndpoint, savedModels, rendererPresetId, modelsHydrated]);
 
   useEffect(() => {
     try {
@@ -344,7 +355,7 @@ export default function App() {
   }, [history]);
 
   const activeModelSpec = useMemo(
-    () => getWanModelSpec(modelId) || getWanModelSpec('wan3_0')!,
+    () => getWanModelSpec(modelId) || getWanModelSpec('custom')!,
     [modelId]
   );
 
@@ -358,6 +369,7 @@ export default function App() {
       secretEnvName,
       openrouterModel,
       openrouterEndpoint,
+      rendererPresetId,
       prompt,
       negativePrompt,
       audioCue,
@@ -382,6 +394,7 @@ export default function App() {
       secretEnvName,
       openrouterModel,
       openrouterEndpoint,
+      rendererPresetId,
       prompt,
       negativePrompt,
       audioCue,
@@ -450,6 +463,7 @@ export default function App() {
     setRemoteEndpoint(preset.endpoint);
     setRemoteProvider(preset.provider);
     setSecretEnvName(nextSecret);
+    if (isDirectorModel(preset.modelId, modelCatalog)) setOpenRouterModel(preset.modelId);
     setGenerationError(null);
     setStatusMessage(
       `Applied saved model "${preset.modelId}" (${preset.provider} · key: ${nextSecret}).`
@@ -462,6 +476,26 @@ export default function App() {
       openrouterModel,
       openrouterEndpoint,
     });
+  }
+
+  function handleSaveRenderer(model: VideoModelOption) {
+    const existing = savedModels.find(m => m.modelId === model.id && m.provider === 'openrouter' && !m.endpoint);
+    const preset: SavedVideoModel = existing || {
+      id: `model-${Date.now()}`, modelId: model.id, endpoint: '', provider: 'openrouter',
+      secretEnvName: 'OPENROUTER_API_KEY', savedAt: new Date().toISOString(),
+    };
+    setSavedModels(prev => existing ? prev : [preset, ...prev].slice(0, 16));
+    setRendererPresetId(preset.id);
+    if (!isDirectorModel(remoteModelId, modelCatalog)) handleSelectSavedModel(preset);
+    if (model.supported_durations?.length && !model.supported_durations.includes(duration)) setDuration(model.supported_durations[0]);
+    if (model.supported_resolutions?.length && !model.supported_resolutions.includes(resolution)) {
+      const supported = model.supported_resolutions.find(r => ['480p', '720p', '1080p'].includes(r));
+      if (supported) setResolution(supported as Wan3Resolution);
+    }
+    if (model.supported_aspect_ratios?.length && !model.supported_aspect_ratios.includes(aspectRatio)) {
+      const supported = model.supported_aspect_ratios.find(r => ['16:9', '9:16', '1:1', '4:3', '3:4'].includes(r));
+      if (supported) setAspectRatio(supported as Wan3AspectRatio);
+    }
   }
 
   function handleDeleteSavedModel(id: string) {
@@ -554,7 +588,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt,
-          openrouterModel,
+          openrouterModel: isDirectorModel(remoteModelId, modelCatalog) ? remoteModelId : openrouterModel,
+          secretEnvName: isDirectorModel(remoteModelId, modelCatalog) ? secretEnvName : 'auto',
           openrouterEndpoint,
           modelId,
           remoteModelId: remoteModelId.trim() || undefined,
@@ -630,6 +665,8 @@ export default function App() {
     setRenderTotalSec(expectedSec);
 
     try {
+      const synced = await syncSavedStateToServer(savedModels, { remoteModelId, remoteEndpoint, remoteProvider, secretEnvName, openrouterModel, openrouterEndpoint, rendererPresetId });
+      if (!synced) throw new Error('Saved model sync failed. Retry saving before generating.');
       const res = await fetch('/api/wan/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -661,15 +698,19 @@ export default function App() {
 
       // Poll async GPU / Cloud endpoint if a taskId was returned without an immediate videoUrl
       if (!finalVideoUrl && data.taskId) {
-        for (let attempt = 0; attempt < 90; attempt++) {
+        for (let attempt = 0; attempt < 240; attempt++) {
           if (abortController.signal.aborted) {
             throw new Error('Video rendering cancelled.');
           }
-          await new Promise((r) => window.setTimeout(r, 2000));
-          setRenderProgress(Math.min(95, 10 + Math.round((attempt / 90) * 85)));
+          await new Promise((r) => window.setTimeout(r, 5000));
+          setRenderProgress(Math.min(95, 10 + Math.round((attempt / 240) * 85)));
           const pollRes = await fetch(`/api/wan/status/${encodeURIComponent(data.taskId)}`, {
             signal: abortController.signal,
           });
+          if (!pollRes.ok) {
+            const error = await pollRes.json().catch(() => ({}));
+            throw new Error(error.error || `Video status check failed (${pollRes.status}).`);
+          }
           if (pollRes.ok) {
             const pollData = (await pollRes.json()) as {
               videoUrl?: string | null;
@@ -707,34 +748,7 @@ export default function App() {
           ? startImage?.dataUrl || null
           : referenceImages[0]?.dataUrl || null;
 
-      if (!finalVideoUrl && data.renderLocalFallback) {
-        const rendered = await renderLocalMotionVideo({
-          input: currentInput,
-          aiPlan: data.aiPlan || null,
-          signal: abortController.signal,
-          onProgress: (pct, elapsed, total) => {
-            setRenderProgress(pct);
-            setRenderElapsedSec(elapsed);
-            setRenderTotalSec(total);
-          },
-        });
-        finalVideoUrl = rendered.videoUrl;
-        finalStatus = 'local-webm';
-
-        const vfxList = Object.entries(rendered.choreography.vfx)
-          .filter(([, enabled]) => enabled)
-          .map(([key]) => key);
-
-        renderMeta = {
-          width: rendered.choreography.width,
-          height: rendered.choreography.height,
-          durationSec: rendered.choreography.durationSec,
-          hasAudioTrack: rendered.hasAudioTrack,
-          vfxList,
-          beatsCount: rendered.choreography.beats.length,
-          cameraId: rendered.choreography.cameraOverrideId || currentInput.cameraPresetId,
-        };
-      }
+      if (!finalVideoUrl) throw new Error('The provider returned no playable video. No local substitute was rendered.');
 
       setRenderProgress(100);
 
@@ -753,20 +767,7 @@ export default function App() {
       setHistory((prev) => [newTake, ...prev]);
       setActiveTake(newTake);
       window.scrollTo({ top: 0, behavior: 'smooth' });
-      setStatusMessage(
-        finalStatus === 'local-webm' && renderMeta
-          ? `${
-              data.appliedConfig?.directorModel
-                ? `Directed by ${data.appliedConfig.directorModel}`
-                : 'Encoded'
-            } · ${renderMeta.width}×${renderMeta.height} · ${renderMeta.durationSec}s WebM (${
-              renderMeta.hasAudioTrack ? 'with audio' : 'silent'
-            }) for ${effectiveModelLabel}.`
-          : data.notice ||
-              (finalVideoUrl
-                ? `${effectiveModelLabel} video rendered successfully.`
-                : `${effectiveModelLabel} job submitted to endpoint.`)
-      );
+      setStatusMessage(data.notice || `${data.appliedConfig?.model || effectiveModelLabel} video rendered successfully.`);
     } catch (err) {
       if (
         (err instanceof DOMException && err.name === 'AbortError') ||
@@ -886,6 +887,11 @@ export default function App() {
 
                 <div className="border-t border-white/[0.08] pt-5">
                   <VideoSettingsPanel
+                    modelCatalog={modelCatalog}
+                    catalogError={catalogError}
+                    rendererPresetId={rendererPresetId}
+                    onChangeRendererPresetId={setRendererPresetId}
+                    onSaveRenderer={handleSaveRenderer}
                     modelId={modelId}
                     remoteModelId={remoteModelId}
                     remoteEndpoint={remoteEndpoint}

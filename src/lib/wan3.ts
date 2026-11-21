@@ -11,6 +11,7 @@ export type Wan3AspectRatio = 'auto' | '16:9' | '9:16' | '1:1' | '4:3' | '3:4';
 export type Wan3MediaMode = 'frames' | 'references';
 export type RemoteProviderHint =
   | 'auto'
+  | 'openrouter'
   | 'dashscope'
   | 'fal'
   | 'replicate'
@@ -71,6 +72,7 @@ export interface Wan3GenerationInput {
   secretEnvName?: string;
   openrouterModel?: string;
   openrouterEndpoint?: string;
+  rendererPresetId?: string;
   prompt: string;
   negativePrompt?: string;
   audioCue?: string;

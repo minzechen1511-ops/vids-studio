@@ -480,10 +480,10 @@ test('resolveVideoSecretKey supports multi-provider secrets, explicit secretEnvN
     apiKey: null,
     secretUsed: 'none',
   });
-  // Does not fail when WAN_API_KEY is absent and another secret is set
+  // A generic endpoint must not receive an unrelated provider credential.
   assert.deepEqual(resolveVideoSecretKey('generic', 'auto', { HF_TOKEN: 'hf_only' }), {
-    apiKey: 'hf_only',
-    secretUsed: 'HF_TOKEN',
+    apiKey: null,
+    secretUsed: null,
   });
 });
 

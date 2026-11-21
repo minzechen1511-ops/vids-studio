@@ -29,7 +29,8 @@ import {
   parseFreeOpenRouterModels,
   type OpenRouterModelOption,
 } from './src/lib/openrouterModels.ts';
-import type { AiDirectorPlan } from './src/lib/promptSceneParser.ts';
+import { selectGenerationRoute, validateVideoModelSettings } from './src/lib/modelRouting.ts';
+import { loadModelCatalog, openRouterContentUrl, writeVideoScript } from './src/lib/openrouterVideo.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,6 +45,7 @@ interface TrackedTask {
   secretUsed: string | null;
   isLocalGpu: boolean;
   createdAt: number;
+  completed?: boolean;
 }
 
 interface StoredVideoModelRecord {
@@ -64,11 +66,13 @@ interface StoredSavedModelsState {
     secretEnvName?: string;
     openrouterModel?: string;
     openrouterEndpoint?: string;
+    rendererPresetId?: string;
   };
 }
 
 const VALID_PROVIDER_HINTS = new Set<RemoteProviderHint>([
   'auto',
+  'openrouter',
   'dashscope',
   'fal',
   'replicate',
@@ -192,53 +196,7 @@ function extractMarkdownSection(markdown: string, heading: string, maxLines = 60
   return lines.slice(startIdx, startIdx + maxLines).join('\n');
 }
 
-function buildLocalWan3Enhancement(input: {
-  rawPrompt: string;
-  cameraId: string;
-  styleId: string;
-  duration: number;
-  mediaMode: 'frames' | 'references';
-  imageCount: number;
-  singleShot: boolean;
-  generateAudio: boolean;
-}) {
-  const camera = CAMERA_PRESETS.find((c) => c.id === input.cameraId) || CAMERA_PRESETS[0];
-  const style = STYLE_PRESETS.find((s) => s.id === input.styleId) || STYLE_PRESETS[0];
-
-  const stripped = input.rawPrompt
-    .replace(/^Generate single shot\.\s*/i, '')
-    .replace(/^(Interpolate smoothly from Image 1[^.]*\.|Animate directly from Image 1[^.]*\.|Maintain subject identity[^.]*\.)\s*/i, '')
-    .trim();
-  const effectiveDuration = input.duration === -1 ? 10 : input.duration;
-  const midPoint = Math.max(1, Math.round(effectiveDuration / 2));
-
-  const shotBeat =
-    effectiveDuration >= 6
-      ? `Shot 1 [0-${midPoint}s]: ${stripped} ${camera.promptPhrase}\nShot 2 [${midPoint}-${effectiveDuration}s]: Continue the physical motion smoothly with natural fabric, hair, and environmental follow-through.`
-      : `Shot 1 [0-${effectiveDuration}s]: ${stripped} ${camera.promptPhrase}`;
-
-  const audioCue = input.generateAudio
-    ? 'Natural environmental ambience, subtle physical contact foley, no overpowering music bed.'
-    : '';
-
-  const refinedPrompt = [
-    shotBeat,
-    `Look: ${style.lookDirective} ${style.colorGrade}.`,
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-
-  const negativePrompt =
-    'warped anatomy, extra limbs, texture flicker, sudden jump cuts, plastic skin smoothing';
-
-  return {
-    refinedPrompt,
-    negativePrompt,
-    audioCue,
-  };
-}
-
-async function createApp() {
+export async function createApp(options: { frontend?: boolean } = {}) {
   const app = express();
   app.use(express.json({ limit: '25mb' }));
 
@@ -263,7 +221,7 @@ async function createApp() {
       skillRepoExists,
       defaultOpenRouterModel:
         process.env.OPENROUTER_MODEL?.trim() || OPENROUTER_PRESET_MODELS[0].id,
-      defaultWanModelId: process.env.WAN_MODEL_ID?.trim() || 'wan3_0',
+      defaultWanModelId: '',
       defaultWanProvider: process.env.WAN_PROVIDER?.trim() || 'auto',
       wanModels: ['wan2_6', 'wan2_7', 'wan3_0', 'wan3_0_prime', 'custom'],
     });
@@ -271,6 +229,11 @@ async function createApp() {
 
   app.get('/api/saved-models', (_req, res) => {
     res.json(readSavedModelsStore());
+  });
+
+  app.get('/api/model-catalog', async (_req, res) => {
+    try { res.json(await loadModelCatalog()); }
+    catch (err) { res.status(503).json({ error: err instanceof Error ? err.message : 'Model catalog unavailable.' }); }
   });
 
   app.put('/api/saved-models', (req, res) => {
@@ -316,6 +279,7 @@ async function createApp() {
       const rawActive = body.activeConfig;
       const sanitizedActive: StoredSavedModelsState['activeConfig'] = rawActive
         ? {
+            rendererPresetId: typeof rawActive.rendererPresetId === 'string' ? rawActive.rendererPresetId.slice(0, 80) : '',
             remoteModelId:
               typeof rawActive.remoteModelId === 'string'
                 ? rawActive.remoteModelId.trim().slice(0, 180)
@@ -419,6 +383,7 @@ async function createApp() {
         remoteModelId?: string;
         openrouterModel?: string;
         openrouterEndpoint?: string;
+        secretEnvName?: string;
         cameraPresetId?: string;
         stylePresetId?: string;
         duration?: number;
@@ -458,7 +423,7 @@ async function createApp() {
         return;
       }
 
-      const wanModelId = body.remoteModelId?.trim() || body.modelId || 'wan3_0';
+      const wanModelId = body.remoteModelId?.trim() || body.modelId || 'custom';
       const cameraId = body.cameraPresetId || 'dolly-in';
       const styleId = body.stylePresetId || 'cinematic';
       const duration = typeof body.duration === 'number' ? body.duration : 5;
@@ -469,25 +434,9 @@ async function createApp() {
       const generateAudio = body.generateAudio !== false;
       const images = Array.isArray(body.images) ? body.images.slice(0, 10) : [];
 
-      const apiKey = process.env.OPENROUTER_API_KEY?.trim();
+      const apiKey = resolveVideoSecretKey('openrouter', body.secretEnvName, process.env).apiKey;
       if (!apiKey) {
-        const local = buildLocalWan3Enhancement({
-          rawPrompt,
-          cameraId,
-          styleId,
-          duration,
-          mediaMode,
-          imageCount: images.length,
-          singleShot,
-          generateAudio,
-        });
-        res.json({
-          mode: 'skill-local',
-          model: openrouterModel,
-          ...local,
-          notice:
-            'OPENROUTER_API_KEY is not set in server Secrets — formatted using the local Higgsfield Wan skill engine. Add OPENROUTER_API_KEY in Settings -> Secrets to route via OpenRouter.',
-        });
+        res.status(400).json({ error: 'Configure the saved director secret in Settings → Secrets before enhancing the prompt.' });
         return;
       }
 
@@ -603,147 +552,9 @@ async function createApp() {
     }
   });
 
-  async function buildOpenRouterChoreographyPlan(
-    input: Wan3GenerationInput
-  ): Promise<AiDirectorPlan | null> {
-    const apiKey = process.env.OPENROUTER_API_KEY?.trim();
-    if (!apiKey || !input.prompt?.trim()) return null;
-
-    const openrouterModel =
-      input.openrouterModel?.trim() ||
-      process.env.OPENROUTER_MODEL?.trim() ||
-      OPENROUTER_PRESET_MODELS[0].id;
-    const requestedLlmEndpoint =
-      input.openrouterEndpoint?.trim() || 'https://openrouter.ai/api/v1/chat/completions';
-
-    const llmCheck = validateAllowedHttpsEndpoint(
-      requestedLlmEndpoint,
-      'llm',
-      getEnvHostList(['OPENROUTER_ENDPOINT'])
-    );
-    if (!llmCheck.allowed || !llmCheck.normalizedUrl) return null;
-
-    const durationSec = input.duration === -1 ? 10 : Math.max(1, input.duration);
-    const activeImages =
-      input.mediaMode === 'frames'
-        ? [input.startImage, input.endImage].filter((x): x is NonNullable<typeof x> => Boolean(x?.dataUrl))
-        : (input.referenceImages || []).filter((x) => Boolean(x?.dataUrl));
-
-    const systemPrompt = [
-      'You are an unfiltered AI Video Choreography Director.',
-      'Convert the user script and uploaded reference images into a precise beat-by-beat JSON storyboard plan.',
-      'Output ONLY valid JSON matching this schema:',
-      '{',
-      '  "accentColor": "#hex",',
-      '  "secondaryColor": "#hex",',
-      '  "audioProfile": "rain"|"wind"|"engine"|"fire"|"melodic"|"night-ambience",',
-      '  "beats": [',
-      '    {',
-      '      "startSec": number,',
-      '      "endSec": number,',
-      '      "text": "short shot beat description",',
-      '      "imageIndices": [0-based indices of uploaded images matching ONLY this beat],',
-      '      "action": "walk-left"|"walk-right"|"approach"|"retreat"|"turn-left"|"turn-right"|"rise"|"fall"|"orbit"|"sprint"|"shake"|"idle",',
-      '      "transition": "cut"|"dissolve"|"wipe-left"|"wipe-right"|"flash",',
-      '      "focalX": 0.15..0.85,',
-      '      "focalY": 0.15..0.85,',
-      '      "zoom": 1.0..1.7,',
-      '      "lightingTint": "#hex or null",',
-      '      "speedMultiplier": 0.6..1.6,',
-      '      "vfx": { "rain": bool, "snow": bool, "mist": bool, "embers": bool, "neonGlow": bool, "sunbeams": bool, "lightning": bool, "dustMotes": bool }',
-      '    }',
-      '  ]',
-      '}',
-      'Rules: Do NOT blend unrelated reference images unless the beat asks for it; assign each beat only the matching imageIndices and set focalX/focalY on the described subject/detail. Preserve 100% of the user creative intent.',
-    ].join('\n');
-
-    const userText = [
-      `Target Video Model ID: ${getEffectiveModelId(input)}`,
-      `Total Duration: ${durationSec}s · Single Shot Lock: ${Boolean(input.singleShot)}`,
-      `Camera Preset: ${input.cameraPresetId} · Style Preset: ${input.stylePresetId}`,
-      `Uploaded Images (${activeImages.length}): ${activeImages.map((img, i) => `Image ${i} (${img.name})`).join(', ') || 'None (text-to-video)'}`,
-      `User Prompt:\n${input.prompt}`,
-      input.negativePrompt ? `Negative Prompt: ${input.negativePrompt}` : '',
-      input.audioCue ? `Audio Cue: ${input.audioCue}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n');
-
-    const contentParts: Array<
-      { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
-    > = [{ type: 'text', text: userText }];
-
-    const liveCatalog = cachedFreeModels?.models || [];
-    const presetMeta =
-      liveCatalog.find((m) => m.id === openrouterModel) ||
-      OPENROUTER_PRESET_MODELS.find((m) => m.id === openrouterModel);
-    const attachVision = presetMeta ? presetMeta.vision : false;
-
-    if (attachVision) {
-      for (const img of activeImages.slice(0, 3)) {
-        if (img.dataUrl.startsWith('data:image/')) {
-          contentParts.push({ type: 'image_url', image_url: { url: img.dataUrl } });
-        }
-      }
-    }
-
-    const runDirectorFetch = async (withVision: boolean): Promise<AiDirectorPlan | null> => {
-      const directorRes = await fetch(llmCheck.normalizedUrl!, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
-          'X-Title': 'MZ Vids Studio',
-        },
-        body: JSON.stringify({
-          model: openrouterModel,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: withVision && contentParts.length > 1 ? contentParts : userText },
-          ],
-          temperature: 0.35,
-          max_tokens: 900,
-        }),
-        signal: AbortSignal.timeout(18000),
-      });
-
-      if (!directorRes.ok) return null;
-      const json = (await directorRes.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-      };
-      const raw = json.choices?.[0]?.message?.content?.trim() || '';
-      const cleaned = raw
-        .replace(/^```json\s*/i, '')
-        .replace(/^```\s*/i, '')
-        .replace(/```$/i, '')
-        .trim();
-      const firstBrace = cleaned.indexOf('{');
-      const lastBrace = cleaned.lastIndexOf('}');
-      if (firstBrace === -1 || lastBrace <= firstBrace) return null;
-      const parsed = JSON.parse(cleaned.slice(firstBrace, lastBrace + 1)) as AiDirectorPlan;
-      if (!Array.isArray(parsed.beats) || parsed.beats.length === 0) return null;
-      return {
-        ...parsed,
-        directorModel: openrouterModel,
-      };
-    };
-
-    try {
-      const primary = await runDirectorFetch(contentParts.length > 1);
-      if (primary) return primary;
-      if (contentParts.length > 1) {
-        return await runDirectorFetch(false);
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
   app.post('/api/wan/generate', async (req, res) => {
     try {
-      const input = req.body as Wan3GenerationInput;
+      let input = req.body as Wan3GenerationInput;
       const validation = validateWan3Payload(input);
       if (!validation.valid) {
         res.status(400).json({
@@ -753,7 +564,29 @@ async function createApp() {
         return;
       }
 
+      let directorModel: string | undefined;
+      let directorScript: string | undefined;
+      // Resolve the selected saved model before legacy environment endpoints can override it.
+      if (input.remoteProvider === 'openrouter' ||
+          ((!input.remoteProvider || input.remoteProvider === 'auto') && !input.remoteEndpoint &&
+           !input.remoteModelId?.startsWith('fal-ai/'))) {
+        const catalog = await loadModelCatalog();
+        const selection = selectGenerationRoute(input, readSavedModelsStore().savedModels, catalog);
+        const videoSpec = catalog.videoModels.find(m => m.id === selection.videoInput.remoteModelId);
+        if (videoSpec) validateVideoModelSettings(selection.videoInput, videoSpec);
+        // Validate both bindings before spending tokens on the director.
+        const rendererKey = resolveVideoSecretKey('openrouter', selection.videoInput.secretEnvName, process.env);
+        if (!rendererKey.apiKey) throw new Error('Set OPENROUTER_API_KEY in Settings → Secrets for the selected video model.');
+        directorModel = selection.directorModel;
+        if (directorModel) {
+          const directorKey = resolveVideoSecretKey('openrouter', selection.directorSecret, process.env);
+          if (!directorKey.apiKey) throw new Error('Set OPENROUTER_API_KEY in Settings → Secrets for the saved director.');
+          directorScript = await writeVideoScript(input, directorModel, directorKey.apiKey);
+        }
+        input = selection.videoInput;
+      }
       const job = buildWan3CompiledJob(input);
+      if (directorScript) job.compiledPrompt += `\n\nShooting script by ${directorModel} (follow the original prompt above):\n${directorScript}`;
       const effectiveModel = getEffectiveModelId(input);
       const localEndpoint = process.env.LOCAL_WAN_ENDPOINT?.trim();
       const wanProviderHint = input.remoteProvider || process.env.WAN_PROVIDER?.trim();
@@ -780,6 +613,10 @@ async function createApp() {
         }
 
         const providerKind = detectWanProvider(endpointCheck.normalizedUrl, wanProviderHint);
+        if (providerKind === 'openrouter' && endpointCheck.normalizedUrl !== 'https://openrouter.ai/api/v1/videos') {
+          res.status(400).json({ error: 'OpenRouter video models require https://openrouter.ai/api/v1/videos.' });
+          return;
+        }
         const secretResolution = resolveVideoSecretKey(
           providerKind,
           input.secretEnvName,
@@ -817,6 +654,7 @@ async function createApp() {
             endpoint: endpointCheck.normalizedUrl,
             endpointSource: endpointResolution.source,
             secretUsed: secretResolution.secretUsed || 'none',
+            directorModel,
           };
           res.json({
             status: 'completed',
@@ -866,6 +704,10 @@ async function createApp() {
         }
 
         const extracted = extractVideoAndTask(providerData);
+        if (!extracted.videoUrl && !extracted.taskId) {
+          res.status(502).json({ error: 'The selected provider returned neither a video nor a job ID. No substitute video was created.' });
+          return;
+        }
         if (extracted.taskId && !extracted.videoUrl) {
           pruneOldTasks();
           let pollUrl = `${endpointCheck.normalizedUrl.replace(/\/+$/, '')}/${encodeURIComponent(
@@ -881,7 +723,8 @@ async function createApp() {
               'video',
               getEnvHostList(['WAN_API_ENDPOINT'])
             );
-            if (statusCheck.allowed && statusCheck.normalizedUrl) {
+            if (statusCheck.allowed && statusCheck.normalizedUrl &&
+                new URL(statusCheck.normalizedUrl).origin === new URL(endpointCheck.normalizedUrl).origin) {
               pollUrl = statusCheck.normalizedUrl;
             }
           }
@@ -892,7 +735,8 @@ async function createApp() {
               'video',
               getEnvHostList(['WAN_API_ENDPOINT'])
             );
-            if (respCheck.allowed && respCheck.normalizedUrl) {
+            if (respCheck.allowed && respCheck.normalizedUrl &&
+                new URL(respCheck.normalizedUrl).origin === new URL(endpointCheck.normalizedUrl).origin) {
               safeResponseUrl = respCheck.normalizedUrl;
             }
           }
@@ -913,6 +757,7 @@ async function createApp() {
           endpoint: endpointCheck.normalizedUrl,
           endpointSource: endpointResolution.source,
           secretUsed: secretResolution.secretUsed || 'none',
+          directorModel,
         };
 
         res.json({
@@ -947,10 +792,13 @@ async function createApp() {
 
         const providerKind = detectWanProvider(localEndpoint, wanProviderHint || 'generic');
         const payload = buildProviderRequestPayload(providerKind, input, job);
+        const localSecret = resolveVideoSecretKey(providerKind, input.secretEnvName, process.env);
+        const localHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...payload.headers };
+        if (localSecret.apiKey) localHeaders.Authorization = providerKind === 'fal' ? `Key ${localSecret.apiKey}` : `Bearer ${localSecret.apiKey}`;
 
         const localRes = await fetch(parsedLocal.toString(), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...payload.headers },
+          headers: localHeaders,
           body: JSON.stringify(payload.body),
         });
 
@@ -975,7 +823,7 @@ async function createApp() {
               provider: 'local-gpu',
               endpoint: localEndpoint,
               endpointSource: 'env',
-              secretUsed: 'LOCAL_WAN_ENDPOINT',
+              secretUsed: localSecret.secretUsed || 'none',
             },
             notice: `Rendered via self-hosted ${effectiveModel} GPU endpoint.`,
           });
@@ -1002,7 +850,7 @@ async function createApp() {
             pollUrl: `${localEndpoint.replace(/\/+$/, '')}/${encodeURIComponent(extracted.taskId)}`,
             responseUrl: null,
             provider: providerKind,
-            secretUsed: null,
+            secretUsed: localSecret.secretUsed,
             isLocalGpu: true,
             createdAt: Date.now(),
           });
@@ -1020,7 +868,7 @@ async function createApp() {
             provider: 'local-gpu',
             endpoint: localEndpoint,
             endpointSource: 'env',
-            secretUsed: 'LOCAL_WAN_ENDPOINT',
+            secretUsed: localSecret.secretUsed || 'none',
           },
           notice: extracted.videoUrl
             ? `Rendered via self-hosted ${effectiveModel} GPU endpoint.`
@@ -1029,34 +877,7 @@ async function createApp() {
         return;
       }
 
-      // 3. No neural video endpoint resolved: use OpenRouter AI Director (when available) + beat-by-beat script storyboard
-      const aiPlan = await buildOpenRouterChoreographyPlan(input);
-      const directorLabel = aiPlan?.directorModel
-        ? `OpenRouter Director (${aiPlan.directorModel})`
-        : 'Local Script Engine';
-      const boundSecretHint =
-        input.secretEnvName && input.secretEnvName !== 'auto' && input.secretEnvName !== 'none'
-          ? ` Bound secret ${input.secretEnvName} needs a matching Provider Adapter (huggingface/fal/replicate/dashscope) or HTTPS endpoint URL to dispatch externally.`
-          : ' Pick a cloud provider adapter or enter an HTTPS Video API Endpoint URL in Video Model & Endpoint Settings for remote GPU synthesis.';
-
-      res.json({
-        status: 'previs-ready',
-        provider: 'local-canvas',
-        renderLocalFallback: true,
-        videoUrl: null,
-        aiPlan,
-        job,
-        validation,
-        appliedConfig: {
-          model: effectiveModel,
-          provider: input.remoteProvider || 'local-canvas',
-          endpoint: 'local-storyboard',
-          endpointSource: 'none',
-          secretUsed: aiPlan ? 'OPENROUTER_API_KEY' : 'none',
-          directorModel: aiPlan?.directorModel || null,
-        },
-        notice: `${directorLabel} directed storyboard (.webm) for "${effectiveModel}".${boundSecretHint}`,
-      });
+      res.status(400).json({ error: `No video endpoint is configured for "${effectiveModel}". Select a video-capable saved model and its provider.`, job });
     } catch (err) {
       res.status(500).json({
         error: err instanceof Error ? err.message : 'Video generation error.',
@@ -1078,7 +899,7 @@ async function createApp() {
 
       if (tracked) {
         const headers: Record<string, string> = {};
-        if (!tracked.isLocalGpu) {
+        if (!tracked.isLocalGpu || tracked.secretUsed) {
           const resolved = resolveVideoSecretKey(
             tracked.provider,
             tracked.secretUsed || 'auto',
@@ -1094,6 +915,10 @@ async function createApp() {
 
         const statusRes = await fetch(tracked.pollUrl, { headers });
         const data = (await statusRes.json().catch(() => ({}))) as Record<string, unknown>;
+        if (!statusRes.ok) {
+          res.status(statusRes.status).json({ error: `Video provider status request failed (${statusRes.status}).` });
+          return;
+        }
         let extracted = extractVideoAndTask(data);
         const output =
           data.output && typeof data.output === 'object' && !Array.isArray(data.output)
@@ -1118,8 +943,13 @@ async function createApp() {
           }
         }
 
+        if (tracked.provider === 'openrouter' && remoteStatus.toLowerCase() === 'completed') {
+          tracked.completed = true;
+          extracted.videoUrl = `/api/video/content/${encodeURIComponent(taskId)}`;
+        }
+
         if (
-          extracted.videoUrl ||
+          (extracted.videoUrl && tracked.provider !== 'openrouter') ||
           ['FAILED', 'ERROR', 'CANCELED', 'CANCELLED'].includes(remoteStatus.toUpperCase())
         ) {
           activeRemoteTasks.delete(taskId);
@@ -1202,6 +1032,28 @@ async function createApp() {
     }
   });
 
+  app.get('/api/video/content/:taskId', async (req, res) => {
+    try {
+      const taskId = String(req.params.taskId);
+      const tracked = activeRemoteTasks.get(taskId);
+      if (!tracked || tracked.provider !== 'openrouter' || !tracked.completed) {
+        res.status(404).json({ error: 'Completed video job not found. Please generate again if the server restarted.' });
+        return;
+      }
+      const secret = resolveVideoSecretKey('openrouter', tracked.secretUsed || 'auto', process.env);
+      if (!secret.apiKey) throw new Error('Video secret is no longer configured.');
+      const result = await fetch(openRouterContentUrl(taskId), {
+        headers: { Authorization: `Bearer ${secret.apiKey}` }, signal: AbortSignal.timeout(90000),
+      });
+      if (!result.ok) { res.status(result.status).json({ error: 'Video download failed at the provider.' }); return; }
+      res.setHeader('Content-Type', result.headers.get('content-type') || 'video/mp4');
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.send(Buffer.from(await result.arrayBuffer()));
+    } catch (err) { res.status(502).json({ error: err instanceof Error ? err.message : 'Video download failed.' }); }
+  });
+
+  if (options.frontend === false) return app;
+
   if (process.env.NODE_ENV === 'production') {
     const distPath = path.resolve(__dirname, 'dist');
     app.use(express.static(distPath));
@@ -1217,12 +1069,11 @@ async function createApp() {
     app.use(vite.middlewares);
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`MZ Vids Studio listening on http://localhost:${PORT}`);
-  });
+  return app;
 }
 
-createApp().catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
+  createApp().then(app => app.listen(PORT, '0.0.0.0', () => {
+    console.log(`MZ Vids Studio listening on http://localhost:${PORT}`);
+  })).catch(err => { console.error('Failed to start server:', err); process.exit(1); });
+}

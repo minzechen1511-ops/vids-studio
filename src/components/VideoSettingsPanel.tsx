@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { isDirectorModel, type ModelCatalog, type VideoModelOption } from '../lib/modelRouting';
 import { BookmarkPlus, Check, Server, Trash2 } from 'lucide-react';
 import {
   CAMERA_PRESETS,
@@ -33,6 +34,11 @@ const KNOWN_SECRET_OPTIONS = [
 ];
 
 interface VideoSettingsPanelProps {
+  modelCatalog: ModelCatalog;
+  catalogError: string | null;
+  rendererPresetId: string;
+  onChangeRendererPresetId: (id: string) => void;
+  onSaveRenderer: (model: VideoModelOption) => void;
   modelId: Wan3ModelId;
   remoteModelId: string;
   remoteEndpoint: string;
@@ -68,6 +74,11 @@ interface VideoSettingsPanelProps {
 }
 
 export function VideoSettingsPanel({
+  modelCatalog,
+  catalogError,
+  rendererPresetId,
+  onChangeRendererPresetId,
+  onSaveRenderer,
   modelId,
   remoteModelId,
   remoteEndpoint,
@@ -108,6 +119,9 @@ export function VideoSettingsPanel({
 
   const secretOptions = Array.from(new Set([...availableSecretKeys, ...KNOWN_SECRET_OPTIONS]));
   const hasAnySecret = availableSecretKeys.length > 0 || hasLocalWanEndpoint;
+  const isDirector = isDirectorModel(remoteModelId, modelCatalog);
+  const savedRenderers = savedModels.filter(m => modelCatalog.videoModels.some(v => v.id === m.modelId) &&
+    (m.provider === 'auto' || m.provider === 'openrouter') && !m.endpoint);
 
   function handleSaveClick() {
     if (!remoteModelId.trim()) return;
@@ -152,14 +166,14 @@ export function VideoSettingsPanel({
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           <div className="space-y-1">
             <label htmlFor="custom-video-model-id" className="block text-[11px] text-[#949BA8]">
-              Video Model ID
+              Saved Model ID (director or video)
             </label>
             <input
               id="custom-video-model-id"
               type="text"
               value={remoteModelId}
               onChange={(e) => onChangeRemoteModelId(e.target.value)}
-              placeholder="e.g. Wan-AI/Wan2.2-TI2V-5B or fal-ai/wan-2.6/image-to-video"
+              placeholder="Select a saved model or enter its exact provider ID"
               className="w-full rounded-lg border border-white/[0.1] bg-[#12151B] px-2.5 py-2 font-mono text-xs text-[#F2F4F8] placeholder:text-[#6B7380] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E5A93C]"
             />
           </div>
@@ -175,6 +189,7 @@ export function VideoSettingsPanel({
               className="w-full rounded-lg border border-white/[0.1] bg-[#12151B] px-2.5 py-2 text-xs text-[#F2F4F8] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#E5A93C]"
             >
               <option value="auto">Auto-detect from Endpoint / ID</option>
+              <option value="openrouter">OpenRouter Video API / Script Director</option>
               <option value="huggingface">Hugging Face Inference (Wan2.1 / LTX)</option>
               <option value="fal">fal.ai (Queue / REST)</option>
               <option value="dashscope">Alibaba DashScope (Wan)</option>
@@ -277,7 +292,7 @@ export function VideoSettingsPanel({
                       </div>
                       <div className="truncate font-mono text-[10px] text-[#949BA8]">
                         {preset.provider} · key: {presetSecret} ·{' '}
-                        {preset.endpoint || 'Auto-endpoint / OpenRouter Storyboard'}
+                        {preset.endpoint || (isDirectorModel(preset.modelId, modelCatalog) ? 'Script director · OpenRouter' : 'Provider video endpoint')}
                       </div>
                     </button>
                     <button
@@ -294,6 +309,29 @@ export function VideoSettingsPanel({
             </div>
           </div>
         )}
+
+        {isDirector && (
+          <div className="space-y-2 rounded-md border border-[#E5A93C]/30 p-3">
+            <p className="text-xs text-[#F5D692]">{remoteModelId} writes the script using its saved secret binding. A video model renders that script and your original prompt.</p>
+            <label htmlFor="saved-video-renderer" className="block text-xs text-[#D1D6E0]">Saved video renderer</label>
+            <select id="saved-video-renderer" value={rendererPresetId} onChange={e => onChangeRendererPresetId(e.target.value)} className="w-full rounded bg-[#12151B] p-2 text-xs">
+              <option value="">{savedRenderers.length ? 'Use first verified saved video model' : 'No verified video renderer saved'}</option>
+              {savedRenderers.map(m => <option key={m.id} value={m.id}>{m.modelId} · key: {m.secretEnvName || 'auto'}</option>)}
+            </select>
+          </div>
+        )}
+        <div className="space-y-1">
+          <label htmlFor="video-catalog" className="block text-xs text-[#D1D6E0]">Add a video renderer from the live catalog</label>
+          <select id="video-catalog" value="" onChange={e => {
+            const model = modelCatalog.videoModels.find(m => m.id === e.target.value);
+            if (model) onSaveRenderer(model);
+          }} className="w-full rounded bg-[#12151B] p-2 text-xs">
+            <option value="">Choose and save a video model…</option>
+            {modelCatalog.videoModels.map(m => <option key={m.id} value={m.id}>{m.name} · {m.id}</option>)}
+          </select>
+          <p className="text-[11px] text-[#949BA8]">Uses OPENROUTER_API_KEY in Settings → Secrets. Generation uses your provider credits. No model is selected automatically.</p>
+          {catalogError && <p role="alert" className="text-xs text-red-300">{catalogError} Reload to retry.</p>}
+        </div>
 
         <p className="text-[11px] leading-relaxed text-[#949BA8]">
           Active model, endpoint, and secret binding auto-save for your next visit and apply
