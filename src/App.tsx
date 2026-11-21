@@ -168,6 +168,12 @@ export default function App() {
   const [activeTake, setActiveTake] = useState<HistoryTake | null>(null);
 
   useEffect(() => {
+    if (isDirectorModel(remoteModelId, modelCatalog) && openrouterModel !== remoteModelId) {
+      setOpenRouterModel(remoteModelId);
+    }
+  }, [remoteModelId, modelCatalog, openrouterModel]);
+
+  useEffect(() => {
     fetch('/api/model-catalog').then(async res => {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Could not load the live model catalog.');

@@ -250,12 +250,7 @@ export function StageViewport({
               <div className="flex items-center gap-2.5">
                 <Loader2 className="h-4 w-4 animate-spin text-[#E5A93C]" aria-hidden="true" />
                 <span>
-                  {currentInput.remoteEndpoint?.trim() ||
-                  (currentInput.remoteProvider && currentInput.remoteProvider !== 'auto' && currentInput.remoteProvider !== 'generic') ||
-                  hasWanApiKey ||
-                  hasLocalWanEndpoint
-                    ? `Applying ${currentInput.remoteModelId?.trim() || displaySpec?.name || currentInput.modelId}...`
-                    : `Directing & encoding .webm clip (${renderElapsedSec.toFixed(1)}s / ${renderTotalSec.toFixed(1)}s)...`}
+                  {`Generating with ${currentInput.remoteModelId?.trim() || displaySpec?.name || currentInput.modelId}...`}
                 </span>
               </div>
               <div className="flex items-center gap-3">
@@ -427,8 +422,8 @@ export function StageViewport({
                 Upload a reference photo or load a starter plate
               </h3>
               <p className="mt-1.5 max-w-md text-xs leading-relaxed text-[#949BA8]">
-                Click Generate Video to encode a playable WebM motion video directly in your browser,
-                or select a saved video model and its provider.
+                Describe your shot and select a saved video model to generate it. A saved text
+                director writes the script for your selected video renderer.
               </p>
               <div className="mt-5 flex flex-wrap items-center justify-center gap-2.5">
                 {STARTER_REFERENCES.map((s) => (
