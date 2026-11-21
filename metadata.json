@@ -1,0 +1,6 @@
+{
+  "name": "Wan 3.0 Studio",
+  "description": "Wan 3.0 video generation and prompt director workspace powered by OpenRouter LLMs and the Higgsfield AI prompt skill.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

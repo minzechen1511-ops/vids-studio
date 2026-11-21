@@ -1,0 +1,117 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-display: 'Outfit', system-ui, sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #0B0D10;
+    color: #F2F4F8;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom sleek dark scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0B0D10;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #252B36;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #353D4C;
+}
+
+/* Motion pre-vis keyframes for camera simulation */
+@keyframes cam-dolly-in {
+  0% { transform: scale(1) translate3d(0, 0, 0); }
+  100% { transform: scale(1.18) translate3d(0, -1%, 0); }
+}
+
+@keyframes cam-dolly-out {
+  0% { transform: scale(1.18) translate3d(0, -1%, 0); }
+  100% { transform: scale(1) translate3d(0, 0, 0); }
+}
+
+@keyframes cam-dolly-left {
+  0% { transform: scale(1.12) translate3d(4%, 0, 0); }
+  100% { transform: scale(1.12) translate3d(-4%, 0, 0); }
+}
+
+@keyframes cam-dolly-right {
+  0% { transform: scale(1.12) translate3d(-4%, 0, 0); }
+  100% { transform: scale(1.12) translate3d(4%, 0, 0); }
+}
+
+@keyframes cam-crane-up {
+  0% { transform: scale(1.15) translate3d(0, 4%, 0); }
+  100% { transform: scale(1.06) translate3d(0, -4%, 0); }
+}
+
+@keyframes cam-crane-down {
+  0% { transform: scale(1.06) translate3d(0, -4%, 0); }
+  100% { transform: scale(1.15) translate3d(0, 4%, 0); }
+}
+
+@keyframes cam-orbit {
+  0% { transform: scale(1.14) translate3d(-3%, 1%, 0) rotate(-0.8deg); }
+  50% { transform: scale(1.18) translate3d(0%, -1.5%, 0) rotate(0deg); }
+  100% { transform: scale(1.14) translate3d(3%, 1%, 0) rotate(0.8deg); }
+}
+
+@keyframes cam-handheld {
+  0%, 100% { transform: scale(1.08) translate3d(0px, 0px, 0) rotate(0deg); }
+  20% { transform: scale(1.09) translate3d(-6px, 4px, 0) rotate(-0.5deg); }
+  45% { transform: scale(1.08) translate3d(5px, -5px, 0) rotate(0.4deg); }
+  70% { transform: scale(1.1) translate3d(-4px, -3px, 0) rotate(-0.3deg); }
+  85% { transform: scale(1.09) translate3d(4px, 5px, 0) rotate(0.3deg); }
+}
+
+@keyframes cam-crash-zoom {
+  0% { transform: scale(1); }
+  70% { transform: scale(1.04); }
+  100% { transform: scale(1.32); }
+}
+
+@keyframes cam-dutch {
+  0% { transform: scale(1.14) rotate(-3.5deg) translate3d(0, 0, 0); }
+  100% { transform: scale(1.22) rotate(-5deg) translate3d(0, -1%, 0); }
+}
+
+@keyframes cam-fpv {
+  0% { transform: scale(1.05) rotate(0deg) translate3d(0, 0, 0); }
+  35% { transform: scale(1.16) rotate(1.8deg) translate3d(-2%, 1%, 0); }
+  70% { transform: scale(1.24) rotate(-1.6deg) translate3d(2%, -2%, 0); }
+  100% { transform: scale(1.32) rotate(0.5deg) translate3d(0, -1%, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cam-animate {
+    animation: none !important;
+  }
+}
