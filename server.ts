@@ -564,6 +564,22 @@ export async function createApp(options: { frontend?: boolean } = {}) {
         return;
       }
 
+      // Starter assets are local paths in the preview; providers need actual image bytes.
+      const providerAsset = (asset: NonNullable<Wan3GenerationInput['startImage']>) => {
+        if (!asset.dataUrl.startsWith('/src/assets/images/')) return asset;
+        const root = path.resolve(__dirname, 'src/assets/images');
+        const filename = path.resolve(__dirname, `.${asset.dataUrl}`);
+        if (!filename.startsWith(root + path.sep)) throw new Error('Invalid reference asset path.');
+        const mime = /\.png$/i.test(filename) ? 'image/png' : /\.webp$/i.test(filename) ? 'image/webp' : 'image/jpeg';
+        return { ...asset, dataUrl: `data:${mime};base64,${fs.readFileSync(filename).toString('base64')}` };
+      };
+      input = {
+        ...input,
+        startImage: input.startImage ? providerAsset(input.startImage) : null,
+        endImage: input.endImage ? providerAsset(input.endImage) : null,
+        referenceImages: input.referenceImages?.map(providerAsset),
+      };
+
       let directorModel: string | undefined;
       let directorScript: string | undefined;
       // Resolve the selected saved model before legacy environment endpoints can override it.
@@ -581,7 +597,7 @@ export async function createApp(options: { frontend?: boolean } = {}) {
         if (directorModel) {
           const directorKey = resolveVideoSecretKey('openrouter', selection.directorSecret, process.env);
           if (!directorKey.apiKey) throw new Error('Set OPENROUTER_API_KEY in Settings → Secrets for the saved director.');
-          directorScript = await writeVideoScript(input, directorModel, directorKey.apiKey);
+          directorScript = await writeVideoScript(input, directorModel, directorKey.apiKey, catalog.visionModelIds?.includes(directorModel));
         }
         input = selection.videoInput;
       }

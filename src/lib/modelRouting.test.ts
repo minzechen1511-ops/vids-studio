@@ -77,7 +77,10 @@ test('HTTP generation uses saved Kimi, sends its script to the saved renderer, p
     const saved = await fetch(`${base}/api/saved-models`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ savedModels: [renderer], activeConfig: { remoteModelId: input.remoteModelId, rendererPresetId: renderer.id } }) });
     assert.equal(saved.status, 200);
     assert.equal((await (await fetch(`${base}/api/saved-models`)).json()).activeConfig.rendererPresetId, renderer.id);
-    const generated = await post(input);
+    const generated = await post({ ...input, startImage: {
+      id: 'starter', name: 'starter.jpg', role: 'start_image',
+      dataUrl: '/src/assets/images/sample_cinematic_scene_1795242162857.jpg',
+    } });
     const result = await generated.json();
     assert.equal(generated.status, 200, JSON.stringify(result));
     assert.equal(result.appliedConfig.model, renderer.modelId);
@@ -88,6 +91,8 @@ test('HTTP generation uses saved Kimi, sends its script to the saved renderer, p
     assert.equal(video.body.model, renderer.modelId);
     assert.ok(video.body.prompt.includes(input.prompt));
     assert.match(video.body.prompt, /Shot 1: fox jumps/);
+    assert.match(video.body.frame_images[0].image_url.url, /^data:image\/jpeg;base64,/);
+    assert.ok(!director.body.messages[1].content.some((part: any) => part.type === 'image_url'));
     assert.equal(video.auth, 'Bearer test-only-key');
     assert.ok(!JSON.stringify(result).includes('test-only-key'));
     failPoll = true;

@@ -19,6 +19,7 @@ export interface VideoModelOption {
 export interface ModelCatalog {
   videoModels: VideoModelOption[];
   textModelIds: string[];
+  visionModelIds?: string[];
 }
 
 export function isDirectorModel(modelId: string, catalog?: ModelCatalog): boolean {

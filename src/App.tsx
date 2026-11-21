@@ -113,19 +113,14 @@ export default function App() {
   const [catalogError, setCatalogError] = useState<string | null>(null);
 
   const [mediaMode, setMediaMode] = useState<Wan3MediaMode>('frames');
-  const [startImage, setStartImage] = useState<ReferenceAsset | null>({
-    id: 'starter-init',
-    name: 'night_alley_rider.jpg',
-    dataUrl: STARTER_REFERENCES[0].imageUrl,
-    role: 'start_image',
-  });
+  const [startImage, setStartImage] = useState<ReferenceAsset | null>(null);
   const [endImage, setEndImage] = useState<ReferenceAsset | null>(null);
   const [referenceImages, setReferenceImages] = useState<ReferenceAsset[]>([]);
 
-  const [prompt, setPrompt] = useState<string>(STARTER_REFERENCES[0].suggestedPrompt);
+  const [prompt, setPrompt] = useState<string>('');
   const [negativePrompt, setNegativePrompt] = useState<string>('');
   const [audioCue, setAudioCue] = useState<string>(
-    'Soft rain on cobblestones, low motorcycle idle hum'
+    ''
   );
   const [openrouterModel, setOpenRouterModel] = useState<string>(
     initialConfig.openrouterModel ?? OPENROUTER_PRESET_MODELS[0].id
